@@ -9,7 +9,7 @@ import json
 import re
 import requests
 import datetime
-
+from vk_oauth.settings import STATIC_URL
 from django.http import Http404, HttpResponse
 # Create your views here.
 import os
@@ -20,9 +20,8 @@ VK_OAUTH_URL = 'https://oauth.vk.com/authorize?client_id={client_id}&display=pag
                                            scope=','.join(['offline', 'groups']))
 
 VK_API_BASE_URL = 'https://api.vk.com/method/{METHOD_NAME}?{PARAMETERS}'
+
 def big_login_button(request):
-    #user = User.objects.create(username='5', password='5') 
-    #user.vkuser = VkUser.objects.create(access_token='1', user=user)
     if request.method == "POST":
         if 'login' in request.POST:
             return redirect(VK_OAUTH_URL)
@@ -37,23 +36,27 @@ def login(request):
         access_token = result.group(1)
         if not user_id or not access_token:
             raise Exception
-        #args = fragment.split('&')
-        #user_id = args[2][len('user_id='):]
-        #access_token = args[0][len('access_token='):]
-
     except Exception as e:
+        print 'login| fragment', e
         return HttpResponse(json.dumps({'result': False}))
-    
-    ciphered_access_token = cipher_acces_token(user_id, access_token)
+
     try:
         user = User.objects.get(username=user_id)
         if not user:
             raise User.DoesNotExist
-        user.vkuser.access_token = ciphered_access_token
+        if not user.vkuser:
+            user.vkuser = VkUser.objects.create(access_token=VkUser.salt_access_token(user_id, access_token),
+                                                user=user)
+        user.vkuser.access_token = VkUser.salt_access_token(user_id, access_token)
         user.vkuser.save()
-    except User.DoesNotExist:
+    except Exception as e:
+        print 'login| get user', e
         user = User.objects.create_user(username=user_id, password=user_id)   
-        user.vkuser = VkUser.objects.create(access_token=ciphered_access_token, user=user)
+        try:
+            user.vkuser = VkUser.objects.create(access_token=VkUser.salt_access_token(user_id, access_token),
+                                                user=user)
+        except Exception as e:
+            print 'login| get vkuser', e
     user = authenticate(username=user_id, password=user_id)
     auth_login(request, user)
     return HttpResponse(json.dumps({'result': True}))
@@ -62,21 +65,25 @@ def login(request):
 def logout(request):
     if request.user.is_authenticated():
         update_user_info(request.user)
-        print get_all_vk_groups(request.user, groups_parse)
+        griups = None
+        try:
+             groups = get_all_vk_groups(request.user, groups_parse)
+        except Exception as e:
+            print 'groups err:', e
         if request.method == "POST":
             if 'logout' in request.POST:
                 auth_logout(request)
                 return redirect('login_button')
-        return render(request, 'vk_auth/login_success.html')
+        return render(request, 'vk_auth/login_success.html', {'photo': request.user.vkuser.photo, 'groups': groups})
     else:
         return redirect('login_button')
 
 def update_user_info(user):
     try:
         user_info = get_user_info(user, user_parse)
-    except Exception:
-        #log it here
-       return
+    except Exception as e:
+        print 'update_user_info', e
+        return
 
     user.last_name = user_info['last_name']
     user.first_name = user_info['first_name']
@@ -88,12 +95,16 @@ def update_user_info(user):
         user.vkuser.city = user_info['city']
     if 'photo' in user_info:
         user.vkuser.photo = user_info['photo'] 
+
+    user.vkuser.access_token
+    user.vkuser.save()
        
 
 def get_user_info(user, user_parse):
     url = generate_vk_url('users.get', {'user_id':user.username,
                                         'fields': 'sex, bdate, city, photo_max',
                                         'access_token': user.vkuser.access_token})
+    #print user.vkuser.access_token
     vk_response = requests.get(url)
     vk_json = vk_response.json()
     return user_parse(vk_json)
@@ -106,7 +117,8 @@ def user_parse(vk_json):
         city = get_info_from_vk_database('database.getCitiesById', { 'city_ids' : str(info['city'])
                                                                    }, 'name')
         person_info['city'] = city
-    except Exception:
+    except Exception as e:
+        print 'user_parse|city', e
         pass
 
     try:
@@ -114,18 +126,24 @@ def user_parse(vk_json):
         file_name = photo_url.split('/')[-1]
         photo_response = requests.get(photo_url, stream=True)
         if photo_response.status_code == 200:
-            with open(BASE_DIR + '/images/' + file_name, 'wb+') as photo_file:
+            file_name = STATIC_URL + 'vk_auth/images/' + file_name
+            file_path = '/vk_auth'  + file_name
+            with open(BASE_DIR + file_path, 'wb+') as photo_file:
                 for chunk in photo_response.iter_content(1024):
                     photo_file.write(chunk) 
                 photo_file.close()
-            person_info['bdate'] = file_name
-    except Exception:
+            person_info['photo'] = file_name
+    except Exception as e:
+        print 'user_parse|photo', e
         pass
 
     try:
+        #print info['bdate']
         date, month, year = info['bdate'].split('.')
+        #print date, month, year
         person_info['bdate'] = datetime.date(int(year), int(month), int(date))
-    except Exception:
+    except Exception as e:
+        #print 'user_parse|date', e
         pass
 
     try:
@@ -136,7 +154,8 @@ def user_parse(vk_json):
             person_info['sex'] = True
         else:
             person_info['sex'] = None
-    except Exception:
+    except Exception as e:
+        print 'user_parse|gender', e
         pass
 
     return person_info
@@ -156,17 +175,18 @@ def get_all_vk_groups(user, groups_parse):
                                          'filter': 'moder',
                                          'extended' : '1',
                                          'access_token': user.vkuser.access_token})
+    #print url
     vk_response = requests.get(url)
     return groups_parse(vk_response.json())
 
 def groups_parse(vk_json):
+    print vk_json
     group_items = vk_json['response'][1:]
     result_groups = []
     for group in group_items:
-        print 
         result_groups.append((group['gid'], group['name']))
     return result_groups
 
 #enciphering sould be done inside object manager!!
-def cipher_acces_token(user_id, access_token):
-    return access_token
+#def cipher_acces_token(user_id, access_token):
+#    return access_token

@@ -24,16 +24,30 @@
                 width: 250px;
                 height: 150px;  
             }
+            #image {
+                margin: auto;
+                padding: 15px;
+            }
         </style>
     </head>
     <body>
         <div class="outer">
             <div class="middle">
                 <div class="inner">
+                    <div id="image">
+                        <img src="{{ photo }}"/>
+                    </div>
                     <form method="post" action="">
                        {% csrf_token %}
                         <input type="submit" value="Выйти" name="logout">
                     </form>
+                    <div id="groups">
+                        <ul>Группы
+                            {% for group in groups %}
+                            <li>{{ group.1 }}</li>
+                            {% endfor %}
+                        </ul>
+                    </div>
                 </div>
             </div>
         </div>

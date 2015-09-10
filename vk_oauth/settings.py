@@ -110,3 +110,7 @@ AUTHENTICATION_BACKENDS = (
         'django.contrib.auth.backends.ModelBackend',
     )
 
+
+# for encryption
+
+KEY = 'uOv=+KAgVMJ+riz 1D1p5H=F-~VFZeVQ8yK6k*p7 0A9OEd3ci|yD-y9tCWZ'
